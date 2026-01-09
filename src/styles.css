@@ -250,6 +250,26 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .drawerTitle { font-weight: 800; }
 .drawerBody { padding: 12px; overflow: auto; }
 
+.modalCard {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(540px, calc(100vw - 40px));
+  background: rgba(17,24,39,0.97);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+}
+.modalHeader { display: flex; justify-content: space-between; align-items: center; }
+.modalTitle { font-size: 18px; font-weight: 700; }
+.modalBody { color: rgba(229,231,235,0.92); display: flex; flex-direction: column; gap: 10px; }
+.modalActions { display: flex; justify-content: flex-end; }
+
 .chatLog {
   margin-top: 10px;
   display: flex;

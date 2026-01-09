@@ -294,6 +294,64 @@ export default function DrugLabelPage() {
     return drug.brandName || drug.genericName || drug.name || "Medication";
   }, [drug]);
 
+  function formatEvidenceLabel(label) {
+    return String(label || "")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b\w/g, (match) => match.toUpperCase());
+  }
+
+  function renderEvidenceContent(content) {
+    if (content == null) return null;
+
+    if (Array.isArray(content)) {
+      const items = content
+        .map((item) => (typeof item === "string" ? item.trim() : String(item)))
+        .filter(Boolean);
+      if (!items.length) return null;
+      return (
+        <ul className="bullets">
+          {items.map((item, index) => (
+            <li key={index}>{item}</li>
+          ))}
+        </ul>
+      );
+    }
+
+    if (typeof content === "string") {
+      const paragraphs = content
+        .split(/\n+/)
+        .map((text) => text.trim())
+        .filter(Boolean);
+      if (!paragraphs.length) return null;
+      return paragraphs.map((text, index) => (
+        <p key={index} className="para">
+          {text}
+        </p>
+      ));
+    }
+
+    if (typeof content === "object") {
+      const entries = Object.entries(content).filter(([, value]) => value != null && value !== "");
+      if (!entries.length) return null;
+      return (
+        <div className="stack" style={{ gap: 8 }}>
+          {entries.map(([key, value]) => (
+            <div key={key}>
+              <div className="muted small">{formatEvidenceLabel(key)}</div>
+              {renderEvidenceContent(value) || (
+                <p className="para">{String(value)}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    return <p className="para">{String(content)}</p>;
+  }
+
   async function onExplain(section) {
     const key = section.key;
     setExplainMap((prev) => ({
@@ -326,7 +384,7 @@ export default function DrugLabelPage() {
     setReportData(null);
 
     try {
-      const data = await generatePersonalReport({ drugId, context });
+      const data = await generatePersonalReport({ drugId, drugName: drugTitle, context });
       setReportData(data);
       setReportStatus("success");
     } catch (err) {
@@ -566,7 +624,7 @@ export default function DrugLabelPage() {
       <FloatingActions onOpenReport={() => setReportOpen(true)} onOpenChat={() => setChatOpen(true)} />
 
       {/* Personalized report drawer */}
-      <Drawer open={reportOpen} title="Contextual Safety Report" onClose={() => setReportOpen(false)}>
+      <Drawer open={reportOpen} title="Contextual Evidence Report" onClose={() => setReportOpen(false)}>
         <div className="muted small">
           Optional. Share a bit about yourself to generate a tailored educational summary. Not medical advice.
         </div>
@@ -702,6 +760,17 @@ export default function DrugLabelPage() {
               <div className="cardTitle">Your educational summary</div>
             </div>
             {reportData.summary ? <p className="para">{reportData.summary}</p> : null}
+
+            {reportData.sections?.map((section) => {
+              const content = renderEvidenceContent(section.content);
+              if (!content) return null;
+              return (
+                <div key={section.key} style={{ marginTop: 12 }}>
+                  <div className="subhead">{section.title}</div>
+                  <div>{content}</div>
+                </div>
+              );
+            })}
 
             {reportData.risks?.length ? (
               <>

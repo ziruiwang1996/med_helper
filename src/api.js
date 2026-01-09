@@ -1,4 +1,5 @@
-const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://med-helper-v1.onrender.com/api";
+//const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://med-helper-v1.onrender.com/api";
+const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 
 // openFDA Drug Label endpoint
 const OPENFDA_LABEL_ENDPOINT =
@@ -323,26 +324,73 @@ export async function clearDocuments(thread_id) {
   return res.json();
 }
 
-// ---- Personal Report ----
+// ---- Evidence Report ----
 // This UI feature is optional; if the backend doesn't implement it yet,
 // we return a clear error that the UI can display.
-export async function generatePersonalReport({ drugId, context } = {}) {
-  const url = `${DEFAULT_BASE_URL}/report`;
+export async function generatePersonalReport({ drugId, drugName, context } = {}) {
+  const trimmedId = String(drugId || "").trim();
+  if (!trimmedId) throw new Error("Missing drug id for evidence report.");
+
+  const ctx = context || {};
+  const age = typeof ctx.ageRange === "string" ? ctx.ageRange : "";
+  const sex = typeof ctx.sex === "string" ? ctx.sex : "";
+  const rawWeight = ctx.weight != null ? String(ctx.weight).trim() : "";
+  const unit = ctx.weightUnit === "lb" ? "lb" : "kg";
+  const weight = rawWeight ? `${rawWeight} ${unit}` : "";
+
+  const payload = {
+    drug_set_id: trimmedId,
+    drug_name: drugName || "",
+    age,
+    sex,
+    weight,
+    is_pregnant: ctx.pregnant === "yes",
+    is_breastfeeding: ctx.breastfeeding === "yes",
+  };
+
+  const conditions = typeof ctx.conditions === "string" ? ctx.conditions.trim() : "";
+  if (conditions) payload.conditions = conditions;
+  const otherMeds = typeof ctx.otherMeds === "string" ? ctx.otherMeds.trim() : "";
+  if (otherMeds) payload.other_medications = otherMeds;
+
+  const url = `${DEFAULT_BASE_URL}/evidence`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ drugId, context }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
     // Common case during local dev: backend route not implemented.
     if (res.status === 404) {
       throw new Error(
-        "Personal report endpoint is not available on the backend (expected POST /report)."
+        "Evidence report endpoint is not available on the backend (expected POST /evidence)."
       );
     }
-    throw new Error(`Personal report failed (${res.status})`);
+    throw new Error(`Evidence report failed (${res.status})`);
   }
 
-  return res.json();
+  const data = await res.json();
+  const responseDrugId = data?.drug_set_id || "";
+  const responseDrugName = data?.drug_name || "";
+  const summary = typeof data?.summary === "string" ? data.summary.trim() : "";
+  const faersReport = typeof data?.faers_report === "string" ? data.faers_report.trim() : "";
+  const rweReport = typeof data?.rwe_report === "string" ? data.rwe_report.trim() : "";
+  const trialsReport = typeof data?.clinical_trials_report === "string" ? data.clinical_trials_report.trim() : "";
+
+  const sections = [];
+  if (faersReport) sections.push({ key: "faers_report", title: "FAERS safety signals", content: faersReport });
+  if (rweReport) sections.push({ key: "rwe_report", title: "Real-world evidence", content: rweReport });
+  if (trialsReport) sections.push({ key: "clinical_trials_report", title: "Clinical trials", content: trialsReport });
+
+  return {
+    summary,
+    drugSetId: responseDrugId || trimmedId,
+    drugName: responseDrugName || drugName || "",
+    faersReport: faersReport || null,
+    rweReport: rweReport || null,
+    clinicalTrialsReport: trialsReport || null,
+    sections,
+    raw: data,
+  };
 }
