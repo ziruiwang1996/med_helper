@@ -8,21 +8,11 @@ export default function Layout({ children }) {
   const [showNotice, setShowNotice] = useState(false);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(DEV_NOTICE_KEY);
-      if (!stored) setShowNotice(true);
-    } catch {
-      setShowNotice(true);
-    }
+    setShowNotice(true); // Always show notice on app start
   }, []);
 
   function dismissNotice() {
     setShowNotice(false);
-    try {
-      localStorage.setItem(DEV_NOTICE_KEY, "ack");
-    } catch {
-      // ignore storage errors
-    }
   }
 
   return (
