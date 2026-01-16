@@ -29,7 +29,8 @@ export default function Layout({ children }) {
             <div className="modalBody">
               <p>This tool is still under active development and the agent workflow remains experimental.</p>
               <p>Responses depend on free-tier serverless inference with tight token and rate limits, so interruptions can occur.</p>
-              <p>Do not trust the AI agent for decisions; treat all outputs as unverified exploratory content.</p>
+              <p>Server instance will spin down with inactivity, which can delay requests by 50 seconds or more.</p>
+              <p><strong>Do not trust the AI agent for decisions; treat all outputs as unverified exploratory content.</strong></p>
             </div>
             <div className="modalActions">
               <button className="btn" onClick={dismissNotice}>
