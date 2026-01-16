@@ -11,29 +11,10 @@ import {
   listDocuments,
   clearDocuments,
 } from "../api.js";
+import { getOrCreateThreadId, writeStoredThreadId } from "../chatThread.js";
 import SectionCard from "../components/SectionCard.jsx";
 import FloatingActions from "../components/FloatingActions.jsx";
 import Drawer from "../components/Drawer.jsx";
-
-const CHAT_THREAD_STORAGE_KEY = "drug-helper:thread_id";
-
-function readStoredThreadId() {
-  try {
-    return sessionStorage.getItem(CHAT_THREAD_STORAGE_KEY) || "";
-  } catch {
-    return "";
-  }
-}
-
-function writeStoredThreadId(threadId) {
-  try {
-    const value = String(threadId || "").trim();
-    if (!value) sessionStorage.removeItem(CHAT_THREAD_STORAGE_KEY);
-    else sessionStorage.setItem(CHAT_THREAD_STORAGE_KEY, value);
-  } catch {
-    // Ignore storage failures (e.g., privacy mode)
-  }
-}
 
 function normalizeSections(incomingSections) {
   // If backend doesn't provide sections yet, fall back to standard FDA headings
@@ -63,7 +44,26 @@ export default function DrugLabelPage() {
   // Per-section UI state
   const [showSourceMap, setShowSourceMap] = useState({});
   const [showExplanationMap, setShowExplanationMap] = useState({});
-  const [explainMap, setExplainMap] = useState({}); // { [key]: { status, data, error } }
+  // Explanation cache helpers
+  function getExplainCacheKey(drugId) {
+    return `explainMap_${drugId}`;
+  }
+
+  function loadExplainMap(drugId) {
+    try {
+      const raw = sessionStorage.getItem(getExplainCacheKey(drugId));
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return {};
+  }
+
+  function saveExplainMap(drugId, map) {
+    try {
+      sessionStorage.setItem(getExplainCacheKey(drugId), JSON.stringify(map));
+    } catch {}
+  }
+
+  const [explainMap, setExplainMap] = useState(() => loadExplainMap(drugId)); // { [key]: { status, data, error } }
 
   // Floating drawers
   const [reportOpen, setReportOpen] = useState(false);
@@ -88,7 +88,7 @@ export default function DrugLabelPage() {
   const [chatStatus, setChatStatus] = useState("idle");
   const [chatError, setChatError] = useState("");
   const [chatInput, setChatInput] = useState("");
-  const [chatThreadId, setChatThreadId] = useState(() => readStoredThreadId());
+  const [chatThreadId, setChatThreadId] = useState(() => getOrCreateThreadId());
   const [docsStatus, setDocsStatus] = useState("idle");
   const [docsError, setDocsError] = useState("");
   const [documents, setDocuments] = useState([]);
@@ -96,13 +96,32 @@ export default function DrugLabelPage() {
   const [uploadError, setUploadError] = useState("");
   const [resetStatus, setResetStatus] = useState("idle");
   const [resetError, setResetError] = useState("");
-  const [messages, setMessages] = useState([
-    {
-      role: "assistant",
-      content:
-        "I can help explain this medication’s FDA label sections and safety information. I cannot provide medical advice. What would you like to understand?",
-    },
-  ]);
+  function getChatCacheKey(drugId) {
+    return `chatMessages_${drugId}`;
+  }
+
+  function loadChatMessages(drugId) {
+    try {
+      const raw = sessionStorage.getItem(getChatCacheKey(drugId));
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return [
+      {
+        role: "assistant",
+        content:
+          "I can help explain this medication’s FDA label sections and safety information. I cannot provide medical advice. What would you like to understand?",
+      },
+    ];
+  }
+
+  function saveChatMessages(drugId, messages) {
+    try {
+      sessionStorage.setItem(getChatCacheKey(drugId), JSON.stringify(messages));
+    } catch {}
+  }
+
+  const [messages, setMessages] = useState(() => loadChatMessages(drugId));
+  const chatInitializedRef = useRef(false);
 
   // --- Client-side "word streaming" ---
   // Even if the backend buffers and sends the assistant response in one large chunk,
@@ -125,6 +144,7 @@ export default function DrugLabelPage() {
       } else {
         next.push({ role: "assistant", content: String(text) });
       }
+      saveChatMessages(drugId, next);
       return next;
     });
   }
@@ -220,8 +240,18 @@ export default function DrugLabelPage() {
     writeStoredThreadId(chatThreadId);
   }, [chatThreadId]);
 
+  // Save chat messages on change
+  useEffect(() => {
+    saveChatMessages(drugId, messages);
+  }, [drugId, messages]);
+  // Load cached chat messages if drugId changes
+  useEffect(() => {
+    setMessages(loadChatMessages(drugId));
+  }, [drugId]);
+
   async function ensureChatInitialized() {
-    const data = await initializeChat({ thread_id: chatThreadId || "" });
+    const currentThreadId = getOrCreateThreadId();
+    const data = await initializeChat({ thread_id: currentThreadId });
     const nextId = data?.thread_id || data?.threadId || "";
     if (!nextId) throw new Error("Chat initialization failed (missing thread id).");
     if (nextId !== chatThreadId) setChatThreadId(nextId);
@@ -242,8 +272,9 @@ export default function DrugLabelPage() {
   }
 
   useEffect(() => {
-    if (!chatOpen) return;
+    if (!chatOpen || chatInitializedRef.current) return;
     let cancelled = false;
+    chatInitializedRef.current = true;
 
     (async () => {
       try {
@@ -288,6 +319,30 @@ export default function DrugLabelPage() {
       mounted = false;
     };
   }, [drugId]);
+
+  useEffect(() => {
+    if (pageStatus !== "ready") return;
+    if (chatInitializedRef.current) return;
+
+    let cancelled = false;
+    chatInitializedRef.current = true;
+
+    (async () => {
+      try {
+        const thread_id = await ensureChatInitialized();
+        if (cancelled) return;
+        if (thread_id) await refreshDocuments(thread_id);
+      } catch (err) {
+        if (cancelled) return;
+        setChatError(err?.message || "Chat initialization failed.");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageStatus]);
 
   const drugTitle = useMemo(() => {
     if (!drug) return "Medication";
@@ -354,10 +409,15 @@ export default function DrugLabelPage() {
 
   async function onExplain(section) {
     const key = section.key;
-    setExplainMap((prev) => ({
-      ...prev,
-      [key]: { status: "loading", data: null, error: "" },
-    }));
+    // Check cache first
+    if (explainMap[key] && explainMap[key].status === "success") {
+      return;
+    }
+    setExplainMap((prev) => {
+      const next = { ...prev, [key]: { status: "loading", data: null, error: "" } };
+      saveExplainMap(drugId, next);
+      return next;
+    });
 
     try {
       const data = await explainSection({
@@ -366,17 +426,23 @@ export default function DrugLabelPage() {
         sourceText: section.sourceText || "",
       });
 
-      setExplainMap((prev) => ({
-        ...prev,
-        [key]: { status: "success", data, error: "" },
-      }));
+      setExplainMap((prev) => {
+        const next = { ...prev, [key]: { status: "success", data, error: "" } };
+        saveExplainMap(drugId, next);
+        return next;
+      });
     } catch (err) {
-      setExplainMap((prev) => ({
-        ...prev,
-        [key]: { status: "error", data: null, error: err?.message || "Explain failed." },
-      }));
+      setExplainMap((prev) => {
+        const next = { ...prev, [key]: { status: "error", data: null, error: err?.message || "Explain failed." } };
+        saveExplainMap(drugId, next);
+        return next;
+      });
     }
   }
+  // Keep cache in sync if drugId changes
+  useEffect(() => {
+    setExplainMap(loadExplainMap(drugId));
+  }, [drugId]);
 
   async function onGenerateReport() {
     setReportStatus("loading");
@@ -621,7 +687,7 @@ export default function DrugLabelPage() {
         ))}
       </div>
 
-      <FloatingActions onOpenReport={() => setReportOpen(true)} onOpenChat={() => setChatOpen(true)} />
+      <FloatingActions onOpenChat={() => setChatOpen(true)} />
 
       {/* Personalized report drawer */}
       <Drawer open={reportOpen} title="Contextual Evidence Report" onClose={() => setReportOpen(false)}>

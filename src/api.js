@@ -1,3 +1,5 @@
+import { readStoredThreadId, writeStoredThreadId } from "./chatThread.js";
+
 const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://med-helper-v1.onrender.com/api";
 //const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 
@@ -5,6 +7,30 @@ const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://med-helpe
 const OPENFDA_LABEL_ENDPOINT =
   import.meta.env.VITE_OPENFDA_LABEL_ENDPOINT || "https://api.fda.gov/drug/label.json";
 const OPENFDA_API_KEY = import.meta.env.VITE_OPENFDA_API_KEY;
+
+function resolveThreadIdInput(input, { fallbackToStored = true } = {}) {
+  if (input !== undefined) {
+    const trimmed = String(input ?? "").trim();
+    return trimmed;
+  }
+
+  if (!fallbackToStored) return "";
+
+  const stored = readStoredThreadId();
+  return stored ? String(stored).trim() : "";
+}
+
+function persistThreadId(threadId) {
+  const trimmed = String(threadId || "").trim();
+  if (trimmed) writeStoredThreadId(trimmed);
+}
+
+function ensureThreadId(threadId) {
+  if (!threadId) {
+    throw new Error("Missing thread id. Please reload the app to start a new session.");
+  }
+  return threadId;
+}
 
 // Helper to build query params safely
 function toQuery(params) {
@@ -189,24 +215,26 @@ export async function getDrugLabel(drugId) {
 // ---- Explain a label section via LLM ----
 // Request: { drug_name, section, content }
 // Response example: { drug_name, section, interpretation }
-export async function explainSection({ drugId, sectionKey, sourceText, drugName }) {
+export async function explainSection({ drugId, sectionKey, sourceText, drugName, thread_id } = {}) {
+  const threadId = ensureThreadId(resolveThreadIdInput(thread_id));
   const url = `${DEFAULT_BASE_URL}/interpret`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ 
+    body: JSON.stringify({
       drug_name: drugName || drugId,
-      section: sectionKey,
-      content: sourceText 
+      section_name: sectionKey,
+      section_content: sourceText,
+      thread_id: threadId,
     }),
   });
   if (!res.ok) throw new Error(`Explain failed (${res.status})`);
   const data = await res.json();
   // Map backend response to expected format
-  return { 
+  return {
     explanation: data.interpretation,
     drug_name: data.drug_name,
-    section: data.section
+    section_name: data.section_name,
   };
 }
 
@@ -224,31 +252,34 @@ export async function explainSection({ drugId, sectionKey, sourceText, drugName 
 //   return res.json();
 // }
 
-export async function chat({ message, thread_id }) {
+export async function chat({ message, thread_id } = {}) {
+  const threadId = ensureThreadId(resolveThreadIdInput(thread_id));
   const url = `${DEFAULT_BASE_URL}/chat/batch`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, thread_id }),
+    body: JSON.stringify({ message, thread_id: threadId }),
   });
 
   if (!res.ok) {
     const detail = await res.text(); // <-- this will include FastAPI's {"detail": "..."}
     throw new Error(`Chat failed (${res.status}): ${detail}`);
   }
-
-  return res.json();
+  const data = await res.json();
+  if (data?.thread_id || data?.threadId) persistThreadId(data.thread_id || data.threadId);
+  return data;
 }
 
 // ---- Chat Stream ----
 // Request: { message, thread_id }
 // Response: Server-Sent Events stream
-export async function chatStream({ message, thread_id }) {
+export async function chatStream({ message, thread_id } = {}) {
+  const threadId = ensureThreadId(resolveThreadIdInput(thread_id));
   const url = `${DEFAULT_BASE_URL}/chat/stream`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, thread_id }),
+    body: JSON.stringify({ message, thread_id: threadId }),
   });
   if (!res.ok) throw new Error(`Chat stream failed (${res.status})`);
   return res;
@@ -257,15 +288,18 @@ export async function chatStream({ message, thread_id }) {
 // ---- Initialize Chat ----
 // Request: { thread_id }
 // Response: { thread_id, status, chat_initialized }
-export async function initializeChat({ thread_id = "" } = {}) {
+export async function initializeChat({ thread_id } = {}) {
+  const resolvedThreadId = resolveThreadIdInput(thread_id);
   const url = `${DEFAULT_BASE_URL}/chat/initialize`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ thread_id }),
+    body: JSON.stringify({ thread_id: resolvedThreadId }),
   });
   if (!res.ok) throw new Error(`Chat initialization failed (${res.status})`);
-  return res.json();
+  const data = await res.json();
+  if (data?.thread_id || data?.threadId) persistThreadId(data.thread_id || data.threadId);
+  return data;
 }
 
 
@@ -273,61 +307,74 @@ export async function initializeChat({ thread_id = "" } = {}) {
 // Request: { thread_id } (optional)
 // Response: { thread_id, message, documents_cleared, cache_stats }
 export async function resetChat({ thread_id } = {}) {
+  const resolvedThreadId = ensureThreadId(resolveThreadIdInput(thread_id));
   const url = `${DEFAULT_BASE_URL}/chat/reset`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ thread_id }),
+    body: JSON.stringify({ thread_id: resolvedThreadId }),
   });
   if (!res.ok) throw new Error(`Chat reset failed (${res.status})`);
-  return res.json();
+  const data = await res.json();
+  if (data?.thread_id || data?.threadId) persistThreadId(data.thread_id || data.threadId);
+  return data;
 }
 
 // ---- Upload Document ----
 // Request: FormData with 'file' and 'thread_id'
 // Response: { message, document, thread_id }
-export async function uploadDocument({ file, thread_id }) {
+export async function uploadDocument({ file, thread_id } = {}) {
+  const resolvedThreadId = ensureThreadId(resolveThreadIdInput(thread_id));
   const url = `${DEFAULT_BASE_URL}/chat/documents/upload`;
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('thread_id', thread_id);
+  formData.append('thread_id', resolvedThreadId);
   
   const res = await fetch(url, {
     method: "POST",
     body: formData,
   });
   if (!res.ok) throw new Error(`Document upload failed (${res.status})`);
-  return res.json();
+  const data = await res.json();
+  if (data?.thread_id || data?.threadId) persistThreadId(data.thread_id || data.threadId);
+  return data;
 }
 
 // ---- List Documents ----
 // Response: { thread_id, documents, count }
 export async function listDocuments(thread_id) {
-  const url = `${DEFAULT_BASE_URL}/chat/documents/list/${thread_id}`;
+  const resolvedThreadId = ensureThreadId(resolveThreadIdInput(thread_id));
+  const url = `${DEFAULT_BASE_URL}/chat/documents/list/${resolvedThreadId}`;
   const res = await fetch(url, {
     method: "GET",
     headers: { "Content-Type": "application/json" },
   });
   if (!res.ok) throw new Error(`Failed to list documents (${res.status})`);
-  return res.json();
+  const data = await res.json();
+  if (data?.thread_id || data?.threadId) persistThreadId(data.thread_id || data.threadId);
+  return data;
 }
 
 // ---- Clear Documents ----
 // Response: { thread_id, message, documents_removed }
 export async function clearDocuments(thread_id) {
-  const url = `${DEFAULT_BASE_URL}/chat/documents/clear/${thread_id}`;
+  const resolvedThreadId = ensureThreadId(resolveThreadIdInput(thread_id));
+  const url = `${DEFAULT_BASE_URL}/chat/documents/clear/${resolvedThreadId}`;
   const res = await fetch(url, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
   });
   if (!res.ok) throw new Error(`Failed to clear documents (${res.status})`);
-  return res.json();
+  const data = await res.json();
+  if (data?.thread_id || data?.threadId) persistThreadId(data.thread_id || data.threadId);
+  return data;
 }
 
 // ---- Evidence Report ----
 // This UI feature is optional; if the backend doesn't implement it yet,
 // we return a clear error that the UI can display.
-export async function generatePersonalReport({ drugId, drugName, context } = {}) {
+export async function generatePersonalReport({ drugId, drugName, context, thread_id } = {}) {
+  const threadId = ensureThreadId(resolveThreadIdInput(thread_id));
   const trimmedId = String(drugId || "").trim();
   if (!trimmedId) throw new Error("Missing drug id for evidence report.");
 
@@ -352,6 +399,7 @@ export async function generatePersonalReport({ drugId, drugName, context } = {})
   if (conditions) payload.conditions = conditions;
   const otherMeds = typeof ctx.otherMeds === "string" ? ctx.otherMeds.trim() : "";
   if (otherMeds) payload.other_medications = otherMeds;
+  payload.thread_id = threadId;
 
   const url = `${DEFAULT_BASE_URL}/evidence`;
   const res = await fetch(url, {
@@ -371,6 +419,7 @@ export async function generatePersonalReport({ drugId, drugName, context } = {})
   }
 
   const data = await res.json();
+  if (data?.thread_id || data?.threadId) persistThreadId(data.thread_id || data.threadId);
   const responseDrugId = data?.drug_set_id || "";
   const responseDrugName = data?.drug_name || "";
   const summary = typeof data?.summary === "string" ? data.summary.trim() : "";

@@ -233,7 +233,10 @@ export default function SectionCard({
 
   function onExplainToggle() {
     if (showExplanation) {
-      onToggleExplanation?.();
+      // Only allow hiding if not loading
+      if (status === "success" || status === "error") {
+        onToggleExplanation?.();
+      }
       return;
     }
 
@@ -259,7 +262,13 @@ export default function SectionCard({
             aria-expanded={showExplanation}
             aria-pressed={showExplanation}
           >
-            {showExplanation ? "Hide explanation" : status === "loading" ? "Explaining..." : "Explain this"}
+            {showExplanation
+              ? status === "loading"
+                ? "Explaining..."
+                : "Hide explanation"
+              : status === "loading"
+                ? "Explaining..."
+                : "Explain this"}
           </button>
         </div>
       </div>
